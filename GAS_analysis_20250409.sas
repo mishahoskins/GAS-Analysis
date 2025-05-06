@@ -4,7 +4,7 @@
  * Program Name:  GAS_analysis_20250409 
  * Author:        Mikhail Hoskins
  * Date Created:  04/09/2025
- * Date Modified: .
+ * Date Modified: 05/06/2025
  * Description:   We want to evaluate GAS over the last decade + in NC. Recent study showed an increase year over year, can we replicate for NC.
  *				  (https://jamanetwork.com/journals/jamanetworkopen/fullarticle/2831512#)
  *
@@ -25,12 +25,7 @@ libname analysis 'T:\HAI\Code library\Epi curve example\ncedss extracts\Datasets
 %let start_dte = 01JAN12; /*Set your start date for range of values DDMMYY*/
 %let end_dte = 31DEC24; /*Set your end date for range of values DDMMMYY*/
 
-proc contents data=denorm.risk_misc_one_time_cd order=varnum; run;
-
-proc print data= denorm.risk_health_care_facility (obs=10) noobs label;where HCE not in ('');run;
-
-
-proc freq data=DENORM.RISK_MISC_ONE_TIME_CD; tables TF_USED_INJECTION_RXS*CODE /norow nocol nopercent nocum;run;
+/*Unless you are pulling new data skip step 2 and import the saved dataset in step 3*/
 
 /*Step 2a: Table 1 GAS and administrative package questions (date reported variable)*/
 proc sql;
@@ -117,14 +112,15 @@ select
 from GAS_updated as a 
 
 	left join denorm.clinic_outcomes_cd as b on a.case_id=b.case_id
-	left join denorm.risk_health_care_exp_cd as c on a.case_id=c.case_id
 	left join denorm.risk_misc_one_time_cd as d on a.case_id=d.case_id
+
+	left join denorm.risk_health_care_exp_cd as c on a.case_id=c.case_id
+
 ;
 quit;
 
 
 proc freq data=GAS_updated_2; tables PAT_OCM HCE TF_USED_INJECTION_RXS/norow nocol nopercent nocum;run;
-
 
 
 /*Missing values by variable*/
@@ -136,19 +132,29 @@ run;
 
 proc freq data=GAS_updated_2;  
 format _CHAR_ $missfmt.; 
-tables PAT_OCM HCE/ missing missprint nocum nopercent; 
+tables PAT_OCM HCE TF_USED_INJECTION_RXS/ missing missprint nocum nopercent; 
 run; 
-
 
 
 
 
 /*Save dataset so we don't have run import step every time (very useful on VPN)*/
 data analysis.GAS_2012_2024;
-set GAS_updated;
+set GAS_updated_2;
 run;
 
 
+/*------------------------------------------------------------------BEGIN ANALYSIS HERE UNLESS CHANGING DENORMALIZED INPUTS------------------------------------------------------------------*/
+
+/*Step 3: Import dataset unless you have made changes prior*/
+
+data GAS_updated_2;
+set analysis.GAS_2012_2024;
+run;
+
+
+
+proc contents data=GAS_updated_2;run;
 /*Begin cleaning and analysis*/
 
 /*General trends*/
@@ -156,7 +162,9 @@ proc sql;
 create table GAS_trend as 
 select
 
-	YEAR as report_yr "Report Year", 
+	YEAR as report_yr "Report Year",
+	/*intnx("month", (MMWR_DATE_BASIS), 0, "end") as testreportqtr "Quarter Ending Date" format=date11., */
+
 	sum (case when TYPE_DESC in ('Streptococcal invasive infection, Group A (61)') then 1 else 0 end) as GAS "Annual Count, GAS",
 /*Clinical Outcome*/
 	sum (case when PAT_OCM in ('Died') then 1 else 0 end) as GAS_died_y "Died",
@@ -184,7 +192,9 @@ select
 /*Invasive procedure*/
 		sum (case when HCE not in ('', 'No') then 1 else 0 end) as GAS_surg "Annual Count, GAS post invasive procedure",
 /*Injection drug use*/
-		sum (case when TF_USED_INJECTION_RXS in ('Yes') then 1 else 0 end) as GAS_inj "Annual Count, GAS injection drug use",
+		sum (case when (TF_USED_INJECTION_RXS in ('Yes') and YEAR in (2018,2019, 2020, 2021, 2022, 2023, 2024)) then 1 else . end) as GAS_inj "Annual Count, GAS injection drug use",
+/*At or above median age*/
+		sum (case when AGE GE (55) and AGE not in (.) then 1 else 0 end) as GAS_age_med "Age Greater-Than-or-Equal-To Median Age of Infection (55)",
 
 
 	/*IR: 2023 NC population constants by race
@@ -204,20 +214,21 @@ select
 
 
 	(calculated GAS / 10835491) * 100000 as GAS_IR "Annual Estimated GAS IR" format 10.2,
-	(calculated GAS_died_Y / 10835491) * 100000 as GAS_IR_mort "Annual Estimated GAS Mortality Rate" format 10.2,
+	(calculated GAS_died_Y / 10835491) * 100000 as GAS_IR_mort "Annual Estimated GAS Mortality Rate**" format 10.2,
 		(calculated GAS_Hisp / 1238421) * 100000 as GAS_IR_hisp "Annual Estimated GAS IR Hispanic" format 10.2,
 		(calculated GAS_nonhisp / 9597070) * 100000 as GAS_IR_nonhisp "Annual Estimated GAS IR Non-Hispanic" format 10.2,
 		(calculated GAS_male / 5538969) * 100000 as GAS_IR_male "Annual Estimated GAS IR Male" format 10.2,
 		(calculated GAS_female / 5296522) * 100000 as GAS_IR_female "Annual Estimated GAS IR Female" format 10.2,
 		(calculated GAS_white / 7564526) * 100000 as GAS_IR_white "Annual Estimated GAS IR White" format 10.2,
 		(calculated GAS_blk / 2392417) * 100000 as GAS_IR_blk "Annual Estimated GAS IR Black/A.A." format 10.2,
-		(calculated GAS_asian / 399358) * 100000 as GAS_IR_asian "Annual Estimated GAS IR Asian" format 10.2,
-		(calculated GAS_AIAN / 172807) * 100000 as GAS_IR_AIAN "Annual Estimated GAS IR A.I./A.N." format 10.2,
-		(calculated GAS_other / 289706) * 100000 as GAS_IR_other "Annual Estimated GAS IR Other Race" format 10.2,
-		(calculated GAS_surg / 10835491) * 100000 as GAS_IR_surg "Annual Estimated GAS IR Invasive Surgery" format 10.2,
-		(calculated GAS_inj / 10835491) * 100000 as GAS_IR_inj "Annual Estimated GAS IR Injection Druge Use" format 10.2 /*need appropriate denominator here*/
+		(calculated GAS_asian / 399358) * 100000 as GAS_IR_asian "Annual Estimated GAS IR Asian**" format 10.2,
+		(calculated GAS_AIAN / 172807) * 100000 as GAS_IR_AIAN "Annual Estimated GAS IR A.I./A.N.**" format 10.2,
+		(calculated GAS_other / 289706) * 100000 as GAS_IR_other "Annual Estimated GAS IR Other Race**" format 10.2,
+		(calculated GAS_surg / 10835491) * 100000 as GAS_IR_surg "Annual Estimated GAS IR Invasive Surgery**" format 10.2,
+		(calculated GAS_inj / 10835491) * 100000 as GAS_IR_inj "Annual Estimated GAS IR Injection Druge Use**" format 10.2, /*need appropriate denominator here*/
+		(calculated GAS_age_med / 10835491) * 100000 as GAS_age_med_IR "Annual Estimated GAS IR Age Above Median" format 10.2
 
-
+/** = Not linear*/
 
 from GAS_updated_2
 	group by report_yr
@@ -225,6 +236,8 @@ from GAS_updated_2
 quit;
 
 proc print data=GAS_trend noobs label;run;
+
+
 
 data GAS_clean;
 set GAS_updated_2;
@@ -260,17 +273,19 @@ set GAS_updated_2;
 /*Median Age (55)*/
 
 	age_med=.;
-	if AGE in (55) then age_med = 1;
-	if AGE not in (55, .) then age_med = 0;
+	if AGE GE (55) then age_med = 1;
+	if (AGE LT (55)) or (AGE in (.)) then age_med = 0;
 
 /*Pt. Outcome*/
 	died=.;
 	if PAT_OCM in ('Survived') then died = 0;
 	if PAT_OCM in ('Died') then died = 1;
+
 /*Invasive Proc.*/
 	surg=.;
 	if HCE in ('No') then surg = 0;
 	if HCE in ('Surgery (besides oral surgery), obstetrical or invasive procedure') then surg = 1;
+
 /*Injection drug use*/
 	inj_drug=.;
 	if TF_USED_INJECTION_RXS in ('No') then inj_drug = 0;
@@ -278,7 +293,32 @@ set GAS_updated_2;
 
 run;
 
-proc freq data=GAS_clean; tables PAT_OCM died surg inj_drug/norow nocol nocum;run;
+proc freq data=GAS_clean; tables  age_med/norow nocol nocum;run;
+
+proc reg data=GAS_trend;
+	model GAS = report_yr / noprint;
+	plot GAS*report_yr / ;
+run;
+
+
+
+
+
+
+/*Export dataset*/
+data analysis.GAS_clean_20250418;
+	set GAS_clean;
+run;
+
+/*And as a CSV*/
+
+proc export data=GAS_trend 
+dbms=csv
+outfile="T:\HAI\Code library\Epi curve example\ncedss extracts\Datasets\gas_trends_20250418.csv"
+replace;
+run;
+
+
 
 
 
@@ -290,23 +330,97 @@ ods excel options (sheet_interval = "now" sheet_name = "case/ir tables" embedded
 proc print data=GAS_trend noobs label;run;
 
 ods excel options (sheet_interval = "now" sheet_name = "Cochran-Armitage " embedded_titles='Yes');
+
 proc freq data=GAS_clean; 
 
-	table /*gender_new*YEAR hispanic_new*YEAR white_binary*YEAR black_binary*YEAR asian_binary*YEAR
-			AIAN_binary*YEAR  other_binary*YEAR age_med*YEAR*/ died*YEAR surg*YEAR / trend norow nocol nopercent scores=table; 
+	table   gender_new*YEAR hispanic_new*YEAR white_binary*YEAR black_binary*YEAR 
+			age_med*YEAR / trend norow nocol nopercent scores=table
+															    plots=freqplot(twoway=stacked); 
 		
 run; 
-/*Separate table for injection drug use, question was asked beginning 2018*/
-proc freq data=GAS_clean; 
+ods excel options (sheet_interval = "none" sheet_name = "linear test" embedded_titles='Yes');
+proc reg data=GAS_trend;
+	model GAS_inj = report_yr / noprint;
+	plot GAS_inj*report_yr / ;
+run;
 
-	table inj_drug*YEAR/ trend norow nocol nopercent scores=table;
-		where YEAR GE 2018; /*Confine to 2018 foward*/
-		
-run; 
+ods excel options (sheet_interval = "none" sheet_name = "linear test" embedded_titles='Yes');
+proc reg data=GAS_trend;
+	model GAS = report_yr / noprint;
+	plot GAS*report_yr / ;
+
+	model GAS_died_y = report_yr / noprint;
+	plot GAS_died_y*report_yr / ;
+
+	model GAS_hisp = report_yr / noprint;
+	plot GAS_hisp*report_yr / ;
+
+	model GAS_nonhisp = report_yr / noprint;
+	plot GAS_nonhisp*report_yr / ;
+
+	model GAS_male = report_yr / noprint;
+	plot GAS_male*report_yr / ;
+
+	model GAS_female = report_yr / noprint;
+	plot GAS_female*report_yr / ;
+
+	model GAS_white = report_yr / noprint;
+	plot GAS_white*report_yr / ;
+
+	model GAS_blk = report_yr / noprint;
+	plot GAS_blk*report_yr / ;
+
+	model GAS_Asian = report_yr / noprint;
+	plot GAS_Asian*report_yr / ;
+
+	model GAS_AIAN = report_yr / noprint;
+	plot GAS_AIAN*report_yr / ;
+
+	model GAS_other = report_yr / noprint;
+	plot GAS_other*report_yr / ;
+
+	model GAS_surg = report_yr / noprint;
+	plot GAS_surg*report_yr / ;
+
+	model GAS_age_med = report_yr / noprint;
+	plot GAS_age_med*report_yr / ;
+run;
+
+
+
+/*Cochran-Armitage Analysis here: (linear variables GE 0.50 R-sq)
+GAS (overall) no C-A analysis but linearity tested
+	Age:
+age_med
+	Race classes:
+White
+African American/Black
+Other
+	Gender:
+Male
+Female
+	Ethnicity:
+Hispanic 
+Non-Hispanic
+
+
+Mann-Kendall Analysis in R: (non-linear variables LT 0.50 R-sq)
+Mortality
+	Risk factors:
+Injection drug use
+Surgery
+	Race classes:
+American Indian/Alaska Native
+Asian
+*/
+
+
+
 
 ods excel close;
 
-
-
 /*Quick interpretation of C/A analysis: Row 1 level, value = 0 (not target), DECREASES as YEAR increases. So as we move forward in years there is a
   statistically significant increase in value = 1 for injection drug use GAS events, gender, ethnicity, and race (except 'Asian' and 'American Indian/Alaska Native'). */
+
+
+
