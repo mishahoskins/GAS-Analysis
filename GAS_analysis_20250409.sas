@@ -4,160 +4,38 @@
  * Program Name:  GAS_analysis_20250409 
  * Author:        Mikhail Hoskins
  * Date Created:  04/09/2025
- * Date Modified: 05/06/2025
+ * Date Modified: 05/14/2025
  * Description:   We want to evaluate GAS over the last decade + in NC. Recent study showed an increase year over year, can we replicate for NC.
  *				  (https://jamanetwork.com/journals/jamanetworkopen/fullarticle/2831512#)
  *
  * Inputs:       case.sas7bdat , case_phi.sas7bdat , Admin_question_package_addl.sas7bdat : Z:\YYYYMMDD
  * Output:       .
- * Notes:        Program pulls GAS. CRE, Cauris, and GAS.
+ * Notes:        Program pulls GAS. 
  *				 Annotations are between /* to help guide. If the code doesn't work or numbers don't align, check here: 
  *				 https://github.com/NC-DPH/Communicable-Disease-Dashboards/blob/main/NCD3v2%20In%20Progress.sas
+ *					Added LTCF 5/14 linear, stat sig using C-A for prop from 2012-2024. Interesting stuff.
  *
  *------------------------------------------------------------------------------
  */
 
 
-/*Step 1: set your pathway. Must have Z drive (or however you are mapped to denormalized tables) access.*/
+/*Step 1: set your pathway.*/
 libname denorm 'Z:\20250301'; /*Select the file name you want from the Z drive. Format is YYYYMMDD. Tables are created monthly*/
-libname analysis 'T:\HAI\Code library\Epi curve example\ncedss extracts\Datasets';/*Path to export your dataset so we don't have to import denormalized tables every time*/
-/*Step 1a: set your date range in the format specified.*/
 %let start_dte = 01JAN12; /*Set your start date for range of values DDMMYY*/
 %let end_dte = 31DEC24; /*Set your end date for range of values DDMMMYY*/
-
-/*Unless you are pulling new data skip step 2 and import the saved dataset in step 3*/
-
-/*Step 2a: Table 1 GAS and administrative package questions (date reported variable)*/
-proc sql;
-create table CASE_COMBO as
-select 
-	s.*, a.EVENT_STATE,
-	b.RPTI_SOURCE_DT_SUBMITTED
-
-from denorm.case 
-
-	as s left join denorm.case_PHI as a on s.case_id=a.case_id
-	left join denorm.Admin_question_package_addl as b on s.case_id=b.case_id
-
-where s.CLASSIFICATION_CLASSIFICATION in ("Confirmed", "Probable")
-	and s.type in ("STRA") 
-	and s.REPORT_TO_CDC = 'Yes';
-
-quit;
-
-/*Step 4: Table 3: Confine to certain key variables. You can add and subtract variables here to fit your needs if necessary*/
-proc sql;
-create table GAS_updated as
-select 
-		OWNING_JD,
-		TYPE, 
-		TYPE_DESC, 
-		CLASSIFICATION_CLASSIFICATION, 
-		CASE_ID,
-		REPORT_TO_CDC,
-
-		input(MMWR_YEAR, 4.) as MMWR_YEAR, 
-		MMWR_DATE_BASIS, 
-
-		count(distinct CASE_ID) as Case_Ct label = 'Counts', 
-		'Healthcare Acquired Infection' as Disease_Group,
-		AGE, 
-		GENDER, 
-		HISPANIC, 
-		RACE1, 
-		RACE2, 
-		RACE3, 
-		RACE4, 
-		RACE5, 
-		RACE6,
-/*This piece should match exactly or almost exactly to the dashboard code found here: https://github.com/NC-DPH/Communicable-Disease-Dashboards/blob/main/NCD3v2%20In%20Progress.sas
-		some of the variable names may be different but the counts need to align*/
-
-		/*don't delete this section, it's a logic path for how the state creates an event date based on submission, lab, and symptom dates*/
-	case 
-	    when MMWR_DATE_BASIS ne . then MMWR_DATE_BASIS
-		when SYMPTOM_ONSET_DATE ne . then SYMPTOM_ONSET_DATE
-	    when (SYMPTOM_ONSET_DATE = . ) and  RPTI_SOURCE_DT_SUBMITTED  ne . then RPTI_SOURCE_DT_SUBMITTED
-	    else datepart(CREATE_DT)
-	    end as EVENT_DATE format=DATE9., 
-
-	year(calculated EVENT_DATE) as Year, 
-	month(calculated EVENT_DATE) as Month, 
-	QTR(calculated EVENT_DATE) as Quarter,
-/*Additional variables for MDRO report*/
-	SYMPTOM_ONSET_DATE, 
-	DISEASE_ONSET_QUALIFIER, 
-	DATE_FOR_REPORTING,
-	RPTI_SOURCE_DT_SUBMITTED, 
-	CREATE_DT, 
-	STATUS
-
-from CASE_COMBO
-where calculated EVENT_DATE >= "&start_dte."d and calculated EVENT_DATE <= "&end_dte."d
-	and STATUS = 'Closed'
-	/*and STATE in ('NC' ' ')*/
-order by TYPE_DESC, YEAR, OWNING_JD;
-quit;
-
-proc sql;
-/*patient outcome, surgical experience, LTCF residency, IV drug use variables add here*/
-create table GAS_updated_2 as
-select 
-
-	a.*,
-	b.PAT_OCM, /*Patient outcome*/
-	c.HCE, /*Surgical experience*/
-	d.TF_USED_INJECTION_RXS /*Injection drug use*/
-
-from GAS_updated as a 
-
-	left join denorm.clinic_outcomes_cd as b on a.case_id=b.case_id
-	left join denorm.risk_misc_one_time_cd as d on a.case_id=d.case_id
-
-	left join denorm.risk_health_care_exp_cd as c on a.case_id=c.case_id
-
-;
-quit;
-
-
-proc freq data=GAS_updated_2; tables PAT_OCM HCE TF_USED_INJECTION_RXS/norow nocol nopercent nocum;run;
-
-
-/*Missing values by variable*/
-proc format; 
-   value $missfmt ' '='Missing' other='Not Missing'; 
-   value missfmt .  ='Missing' other='Not Missing'; 
-run;
-
-
-proc freq data=GAS_updated_2;  
-format _CHAR_ $missfmt.; 
-tables PAT_OCM HCE TF_USED_INJECTION_RXS/ missing missprint nocum nopercent; 
-run; 
-
-
-
-
-/*Save dataset so we don't have run import step every time (very useful on VPN)*/
-data analysis.GAS_2012_2024;
-set GAS_updated_2;
-run;
 
 
 /*------------------------------------------------------------------BEGIN ANALYSIS HERE UNLESS CHANGING DENORMALIZED INPUTS------------------------------------------------------------------*/
 
-/*Step 3: Import dataset unless you have made changes prior*/
+/*Step 2: Import dataset unless you have made changes prior*/
 
 data GAS_updated_2;
 set analysis.GAS_2012_2024;
 run;
 
-
-
-proc contents data=GAS_updated_2;run;
 /*Begin cleaning and analysis*/
 
-/*General trends*/
+/*Step 3: General trends*/
 proc sql;
 create table GAS_trend as 
 select
@@ -195,7 +73,10 @@ select
 		sum (case when (TF_USED_INJECTION_RXS in ('Yes') and YEAR in (2018,2019, 2020, 2021, 2022, 2023, 2024)) then 1 else . end) as GAS_inj "Annual Count, GAS injection drug use",
 /*At or above median age*/
 		sum (case when AGE GE (55) and AGE not in (.) then 1 else 0 end) as GAS_age_med "Age Greater-Than-or-Equal-To Median Age of Infection (55)",
-
+		/*and below*/
+		sum (case when AGE LT (55) and AGE not in (.) then 1 else 0 end) as GAS_age_LOW "Age Less Than Median Age of Infection (55)",
+/*LTCF*/
+		sum (case when LTCF in (1) and LTCF not in (.) then 1 else 0 end) as GAS_ltcf "GAS in LTCF",
 
 	/*IR: 2023 NC population constants by race
 			Gender
@@ -214,7 +95,8 @@ select
 
 
 	(calculated GAS / 10835491) * 100000 as GAS_IR "Annual Estimated GAS IR" format 10.2,
-	(calculated GAS_died_Y / 10835491) * 100000 as GAS_IR_mort "Annual Estimated GAS Mortality Rate**" format 10.2,
+		(calculated GAS_died_Y / 10835491) * 100000 as GAS_IR_mort "Annual Estimated GAS Mortality Rate**" format 10.2, /*Denominator = total population*/
+		(calculated GAS_died_Y / calculated GAS) as GAS_IR_fat "Annual Estimated GAS Case Fatality Rate**" format percent10.2, /*Denominator = total GAS cases*/
 		(calculated GAS_Hisp / 1238421) * 100000 as GAS_IR_hisp "Annual Estimated GAS IR Hispanic" format 10.2,
 		(calculated GAS_nonhisp / 9597070) * 100000 as GAS_IR_nonhisp "Annual Estimated GAS IR Non-Hispanic" format 10.2,
 		(calculated GAS_male / 5538969) * 100000 as GAS_IR_male "Annual Estimated GAS IR Male" format 10.2,
@@ -225,8 +107,10 @@ select
 		(calculated GAS_AIAN / 172807) * 100000 as GAS_IR_AIAN "Annual Estimated GAS IR A.I./A.N.**" format 10.2,
 		(calculated GAS_other / 289706) * 100000 as GAS_IR_other "Annual Estimated GAS IR Other Race**" format 10.2,
 		(calculated GAS_surg / 10835491) * 100000 as GAS_IR_surg "Annual Estimated GAS IR Invasive Surgery**" format 10.2,
-		(calculated GAS_inj / 10835491) * 100000 as GAS_IR_inj "Annual Estimated GAS IR Injection Druge Use**" format 10.2, /*need appropriate denominator here*/
-		(calculated GAS_age_med / 10835491) * 100000 as GAS_age_med_IR "Annual Estimated GAS IR Age Above Median" format 10.2
+		(calculated GAS_inj / 82130) * 100000 as GAS_IR_inj "Annual Estimated GAS IR Injection Druge Use**" format 10.2, /*From T:\HAI\Code library\Epi curve example\analysis and paper: https://academic.oup.com/cid/article/76/1/96/6628702 2018 estimate*/
+		(calculated GAS_age_med / 10835491) * 100000 as GAS_age_med_IR "Annual Estimated GAS IR Age Above Median" format 10.2, /*need appropriate denominator here*/
+		(calculated GAS_age_LOW / 10835491) * 100000 as GAS_age_LOW_IR "Annual Estimated GAS IR Age Below Median" format 10.2 /*need appropriate denominator here*/
+
 
 /** = Not linear*/
 
@@ -238,7 +122,7 @@ quit;
 proc print data=GAS_trend noobs label;run;
 
 
-
+/*Step 4: Binary 1/0 vars for analysis (just makes regression and C-A a little easier*/
 data GAS_clean;
 set GAS_updated_2;
 /*Make all classifications binary with 0 = reference*/
@@ -276,6 +160,10 @@ set GAS_updated_2;
 	if AGE GE (55) then age_med = 1;
 	if (AGE LT (55)) or (AGE in (.)) then age_med = 0;
 
+	age_low=.;
+	if AGE LE (55) then age_low = 1;
+	if (AGE GE (55)) or (AGE in (.)) then age_low = 0;
+
 /*Pt. Outcome*/
 	died=.;
 	if PAT_OCM in ('Survived') then died = 0;
@@ -293,12 +181,7 @@ set GAS_updated_2;
 
 run;
 
-proc freq data=GAS_clean; tables  age_med/norow nocol nocum;run;
-
-proc reg data=GAS_trend;
-	model GAS = report_yr / noprint;
-	plot GAS*report_yr / ;
-run;
+proc freq data=GAS_clean; tables  age_med age_low/norow nocol nocum;run;
 
 
 
@@ -306,21 +189,20 @@ run;
 
 
 /*Export dataset*/
-data analysis.GAS_clean_20250418;
+data analysis.GAS_clean_20250514;
 	set GAS_clean;
 run;
 
-/*And as a CSV*/
-
+/*And as a CSV for MK in R*/
 proc export data=GAS_trend 
 dbms=csv
-outfile="T:\HAI\Code library\Epi curve example\ncedss extracts\Datasets\gas_trends_20250418.csv"
+outfile="T:\HAI\Code library\Epi curve example\ncedss extracts\Datasets\gas_trends_&sysdate..csv"
 replace;
 run;
 
 
 
-
+/*Trend tables, C-A analysis, and linear test output*/
 
 title; footnote;
 /*Set your output pathway here*/
@@ -334,7 +216,7 @@ ods excel options (sheet_interval = "now" sheet_name = "Cochran-Armitage " embed
 proc freq data=GAS_clean; 
 
 	table   gender_new*YEAR hispanic_new*YEAR white_binary*YEAR black_binary*YEAR 
-			age_med*YEAR / trend norow nocol nopercent scores=table
+			age_med*YEAR age_low*YEAR ltcf*YEAR/ trend norow nocol nopercent scores=table
 															    plots=freqplot(twoway=stacked); 
 		
 run; 
@@ -384,6 +266,13 @@ proc reg data=GAS_trend;
 
 	model GAS_age_med = report_yr / noprint;
 	plot GAS_age_med*report_yr / ;
+
+	model GAS_age_LOW = report_yr /noprint;
+	plot GAS_age_LOW*report_yr ;
+
+	model GAS_ltcf = report_yr /noprint;
+	plot GAS_ltcf*report_yr;
+
 run;
 
 
@@ -420,7 +309,16 @@ Asian
 ods excel close;
 
 /*Quick interpretation of C/A analysis: Row 1 level, value = 0 (not target), DECREASES as YEAR increases. So as we move forward in years there is a
-  statistically significant increase in value = 1 for injection drug use GAS events, gender, ethnicity, and race (except 'Asian' and 'American Indian/Alaska Native'). */
+  statistically significant increase in value = 1 at p<0.05 where applicapble */
+
+
+ods graphics on;
+
+proc lifetest data=sashelp.BMT plots=survival /*(cb=all test);*/;
+time T * Status(0);
+strata Group;
+run;
+
 
 
 
